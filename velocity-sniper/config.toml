@@ -1,0 +1,145 @@
+# ═══════════════════════════════════════════════════════════════════════
+# VELOCITY SNIPER — Configuration
+# ═══════════════════════════════════════════════════════════════════════
+# Deploy to: Hetzner Frankfurt VPS (fsn1-dc14 recommended)
+# OS: Ubuntu 24.04 LTS
+# Monthly cost: ~€7/month (CX22 instance)
+#
+# USAGE: Copy this file as config.toml and fill in the values.
+#        Set PRIVATE_KEY env var or fill trading.private_key_bs58.
+# ═══════════════════════════════════════════════════════════════════════
+
+[rpc]
+# Solana RPC — use a paid provider for <100ms latency
+# Free: https://api.mainnet-beta.solana.com (~300ms)
+# Paid: Helius, Triton, QuickNode, Alchemy (~20-50ms)
+endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
+ws_endpoint = "wss://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
+# Premium endpoint for faster confirmation checks (same as main)
+premium_endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
+
+[jito]
+# Jito Block Engine — Frankfurt is closest to Hetzner Frankfurt VPS
+# Options:
+#   Frankfurt:    https://frankfurt.mainnet.block-engine.jito.wiff
+#   Amsterdam:    https://amsterdam.mainnet.block-engine.jito.wiff
+#   Tokyo:        https://tokyo.mainnet.block-engine.jito.wiff
+block_engine_url = "https://frankfurt.mainnet.block-engine.jito.wiff"
+
+# Jito tip accounts — rotates for load distribution
+tip_accounts = [
+    "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+    "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+    "HFqU5x63VTqvQss8hp11i4bVqkfRtQ7NmXwkiNPLNiVZ",
+    "ADaUMid9yfUC67HyGY2avCA952rrXy1RLKmH6iW6eNsL",
+    "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+    "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+    "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
+    "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
+]
+
+# Tip amount per bundle (in lamports, 1 SOL = 1,000,000,000)
+# Higher tip = higher priority for block inclusion
+# Minimum recommended: 100_000 (0.0001 SOL)
+tip_lamports = 100_000
+
+max_bundle_size = 131072
+simulation_timeout_ms = 2000
+
+[shredstream]
+# UDP bind address — 0.0.0.0:0 lets the OS pick a free port
+bind_address = "0.0.0.0:0"
+
+# Jito ShredStream proxy — connect to the closest geographical region
+# Frankfurt (Hetzner fsn1): 185.186.128.136:1002
+# Amsterdam:                 185.209.148.26:1002
+# Tokyo:                     154.36.65.70:1002
+proxy_address = "185.186.128.136:1002"
+
+# UDP receive buffer size — larger = less packet loss at high throughput
+# Max on Linux: cat /proc/sys/net/core/rmem_max
+# Set to 50MB (50,000,000 bytes) — requires: sudo sysctl -w net.core.rmem_max=50000000
+recv_buffer_size = 50_000_000
+
+# Number of worker threads for processing parsed transactions
+worker_threads = 4
+
+[trading]
+# ⚠️ FILL IN YOUR WALLET PRIVATE KEY (base58 encoded)
+# This is the ONLY wallet that will sign and pay for transactions.
+# NEVER share this key. NEVER commit it to git.
+private_key_bs58 ="yafN4yS69wRtJLHHSee7zqkX7chLN7CC6axuyEPAmhCnRYMuNovC6nfkLRoSahv432c2j3ggyKf5FicGZcGps1c"
+
+# Maximum SOL to spend per single trade
+max_sol_per_trade = 0.8
+
+# Take profit: sell at +15% gain
+take_profit_pct = 0.15
+
+# Stop loss: sell at -5% loss
+stop_loss_pct = 0.05
+
+# Maximum allowed slippage for swaps (30% = high, needed for low-liquidity pools)
+max_slippage_pct = 0.30
+
+# Maximum time to hold a position before force-selling (seconds)
+max_hold_seconds = 300
+
+# Minimum pool liquidity in SOL to even consider trading
+min_pool_liquidity_sol = 50.0
+
+[safety]
+# MANDATORY: Mint authority must be disabled (no infinite supply)
+require_mint_authority_disabled = true
+
+# MANDATORY: LP tokens must be burned (liquidity locked)
+require_lp_burned = true
+
+# Maximum % a single holder can own (15%)
+max_single_holder_pct = 0.15
+
+# Maximum % the top 10 holders can own combined (40%)
+max_top10_holders_pct = 0.40
+
+# MANDATORY: Freeze authority must be disabled
+require_freeze_authority_disabled = true
+
+# Minimum number of unique token holders
+min_unique_holders = 20
+
+# Known rug-pull program IDs to blacklist
+blacklisted_programs = [
+    "11111111111111111111111111111111",  # System program (not a token)
+]
+
+[strategy]
+# ═══════════════════════════════════════════════════════════════════
+# THE 90% WIN RATE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════
+
+# Stage 1: Wait 120 seconds after pool init before even considering a buy.
+# This avoids "The War Zone" where gRPC bots fight in the first 60 seconds.
+war_zone_wait_seconds = 120
+
+# Stage 2: TPM must INCREASE by at least 20% between minute 1 and minute 2.
+# This confirms genuine retail momentum (not a bot dump).
+min_tpm_increase_pct = 0.20
+
+# Stage 2: Minimum number of transactions in minute 2 to qualify.
+# Filters out dead pools that got a few initial trades and died.
+min_minute2_transactions = 30
+
+# Stage 3: Delay between trigger and execution (ms)
+# 0ms = immediate, higher = more confirmation but less entry price
+execution_delay_ms = 0
+
+# Maximum concurrent open positions
+max_concurrent_positions = 3
+
+# Cooldown between trades (seconds) — prevents over-trading
+trade_cooldown_seconds = 60
+
+[logging]
+log_level = "info"
+json_logs = true
+log_file = "/var/log/velocity-sniper/sniper.log"
