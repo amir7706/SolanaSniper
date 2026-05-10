@@ -149,7 +149,7 @@ impl ShredListener {
     /// Solana shreds contain FEC data, duplicate shreds (for reliability),
     /// and transaction payloads. We skip FEC/padding and extract only
     /// complete transaction payloads.
-    fn parse_shred(data: &[_u8]) -> Vec<Vec<u8>> {
+    fn parse_shred(data: &[u8]) -> Vec<Vec<u8>> {
         let mut transactions = Vec::new();
 
         // Shred header format:
