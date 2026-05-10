@@ -10,21 +10,16 @@
 # ═══════════════════════════════════════════════════════════════════════
 
 [rpc]
-# Solana RPC — use a paid provider for <100ms latency
-# Free: https://api.mainnet-beta.solana.com (~300ms)
-# Paid: Helius, Triton, QuickNode, Alchemy (~20-50ms)
-endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
-ws_endpoint = "wss://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
+# LOCAL TESTING - Use local test validator
+endpoint = "http://127.0.0.1:8899"
+ws_endpoint = "ws://127.0.0.1:8900"
 # Premium endpoint for faster confirmation checks (same as main)
-premium_endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
+premium_endpoint = "http://127.0.0.1:8899"
 
 [jito]
-# Jito Block Engine — Frankfurt is closest to Hetzner Frankfurt VPS
-# Options:
-#   Frankfurt:    https://frankfurt.mainnet.block-engine.jito.wtf
-#   Amsterdam:    https://amsterdam.mainnet.block-engine.jito.wtf
-#   Tokyo:        https://tokyo.mainnet.block-engine.jito.wtf
-block_engine_url = "https://frankfurt.mainnet.block-engine.jito.wtf"
+# For local testing, Jito is not needed - use placeholder
+# For mainnet use: https://frankfurt.mainnet.block-engine.jito.wtf
+block_engine_url = "http://127.0.0.1:8899"
 
 # Jito tip accounts — rotates for load distribution
 tip_accounts = [
@@ -47,22 +42,19 @@ tip_lamports = 100_000
 simulation_timeout_ms = 5000
 
 [shredstream]
-# UDP bind address — 0.0.0.0:0 lets the OS pick a free port
+# NOTE: For LOCAL TESTING, Jito ShredStream doesn't exist
+# The bot will not receive transactions on local test validator
+# For mainnet use real proxy addresses
 bind_address = "0.0.0.0:0"
 
-# Jito ShredStream proxy — connect to the closest geographical region
-# Frankfurt (Hetzner fsn1): 185.186.128.136:1002
-# Amsterdam:                 185.209.148.26:1002
-# Tokyo:                     154.36.65.70:1002
-proxy_address = "185.186.128.136:1002"
+# Dummy proxy for local testing - won't receive real data
+proxy_address = "127.0.0.1:10000"
 
-# UDP receive buffer size — larger = less packet loss at high throughput
-# Max on Linux: cat /proc/sys/net/core/rmem_max
-# Set to 50MB (50,000,000 bytes) — requires: sudo sysctl -w net.core.rmem_max=50000000
-recv_buffer_size = 50_000_000
+# Smaller buffer for local testing
+recv_buffer_size = 1_000_000
 
 # Number of worker threads for processing parsed transactions
-worker_threads = 4
+worker_threads = 1
 
 [trading]
 # ⚠️ FILL IN YOUR WALLET PRIVATE KEY (base58 encoded)
