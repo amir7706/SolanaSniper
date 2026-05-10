@@ -10,14 +10,14 @@
 # ═══════════════════════════════════════════════════════════════════════
 
 [rpc]
-# MAINNET CONFIGURATION
-endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
-ws_endpoint = "wss://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
-premium_endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-842c-6f61f12fdff9"
+# DEVNET CONFIGURATION (TESTING)
+endpoint = "https://api.devnet.solana.com"
+ws_endpoint = "wss://api.devnet.solana.com"
+premium_endpoint = "https://api.devnet.solana.com"
 
 [jito]
-# Mainnet Jito Block Engine
-block_engine_url = "https://frankfurt.mainnet.block-engine.jito.wtf"
+# Jito doesn't exist on Devnet - use RPC as placeholder
+block_engine_url = "https://api.devnet.solana.com"
 
 # Jito tip accounts — rotates for load distribution
 tip_accounts = [
@@ -40,14 +40,14 @@ tip_lamports = 100_000
 simulation_timeout_ms = 5000
 
 [shredstream]
-# Jito ShredStream proxy - Mainnet
+# Jito ShredStream - Devnet doesn't have real Jito
 bind_address = "0.0.0.0:0"
 
-# Frankfurt proxy (closest to Hetzner)
-proxy_address = "185.186.128.136:1002"
+# Placeholder - won't receive real data on Devnet
+proxy_address = "127.0.0.1:10000"
 
 # Buffer size
-recv_buffer_size = 50_000_000
+recv_buffer_size = 1_000_000
 
 # Worker threads
 worker_threads = 4
