@@ -92,9 +92,19 @@ impl ShredListener {
                 Ok(len) => {
                     shred_count += 1;
 
+                    // DEBUG: Log every 100th packet to verify data flow
+                    if shred_count % 100 == 0 {
+                        info!("[HEARTBEAT] Received packet #{}, total tx extracted: {}", shred_count, tx_count);
+                    }
+
                     // Parse the shred header and extract any complete transactions
                     let shred_data = &buf[..len];
                     let extracted = Self::parse_shred(shred_data);
+                    
+                    // DEBUG: Log if any transactions extracted
+                    if !extracted.is_empty() && tx_count < 5 {
+                        info!("[DATA-FLOW] Extracted {} transactions from shred #{}", extracted.len(), shred_count);
+                    }
 
                     for tx_bytes in extracted {
                         // Send to Raydium detector (for pool detection)

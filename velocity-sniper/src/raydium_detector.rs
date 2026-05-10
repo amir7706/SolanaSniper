@@ -27,6 +27,11 @@ pub async fn run(
         match rx.recv().await {
             Some(tx_bytes) => {
                 scanned_count += 1;
+                
+                // DEBUG: Log every 1000th transaction scanned
+                if scanned_count % 1000 == 0 {
+                    info!("[DETECTOR] Scanned {} transactions, found {} pools", scanned_count, detected_count);
+                }
 
                 if let Some(pool_event) = detect_raydium_init(&tx_bytes, &raydium_program) {
                     detected_count += 1;
@@ -35,7 +40,7 @@ pub async fn run(
                         pool = %pool_event.pool_address,
                         quote_lamports = pool_event.quote_amount,
                         tx = %pool_event.tx_signature,
-                        ">>> POOL INITIALIZATION DETECTED <<<"
+                        ">>> 🚀 POOL INITIALIZATION DETECTED <<<"
                     );
 
                     if tx.send(pool_event).is_err() {

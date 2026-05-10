@@ -57,12 +57,16 @@ pub async fn run(
 
     let gold_list_for_pool = gold_list.clone();
     tokio::spawn(async move {
+        let mut pool_count: u64 = 0;
         loop {
             match pool_event_rx.recv().await {
                 Ok(event) => {
+                    pool_count += 1;
                     let mint = event.base_mint.to_string();
                     let pool = event.pool_address.to_string();
                     let dev_address = event.authority.to_string();
+                    
+                    info!("[STRATEGY] Received pool event #{} - mint: {}, pool: {}", pool_count, &mint[..8], &pool[..8]);
                     
                     let passed = pre_check.process(
                         &[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -70,10 +74,13 @@ pub async fn run(
                         &dev_address,
                     );
                     
+                    info!("[STRATEGY] Pre-check result for {}: {}", &mint[..8], passed);
+                    
                     if passed {
                         let mut gold = gold_list_for_pool.write().await;
                         if !gold.is_full() {
-                            let _ = gold.add(mint, pool, dev_address);
+                            let added = gold.add(mint, pool, dev_address);
+                            info!("[STRATEGY] Added to Gold List: {}", added);
                             
                             if gold.is_full() {
                                 info!("Gold List FULL - Pre-check stopping");
