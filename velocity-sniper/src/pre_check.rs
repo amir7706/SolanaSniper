@@ -68,11 +68,11 @@ pub fn gold_filter(data: &[u8], program_id: &str, dev_address: &str) -> bool {
     
     let is_raydium = check_program_id(program_id);
     let is_new_mint = check_instruction_discriminator(data);
-    let is_trusted = check_dev_trusted(dev_address);
+    let _is_trusted = check_dev_trusted(dev_address);
     
-    (is_raydium && is_new_mint && is_trusted) || 
-    (bitmask == 0b011 && is_raydium && is_new_mint) ||
-    (bitmask == 0b101 && is_raydium && is_trusted)
+    // TEMPORARILY PERMISSIVE: Allow any Raydium pool + new mint
+    // This is for testing - remove trusted dev requirement
+    is_raydium && is_new_mint
 }
 
 pub struct PreCheck {

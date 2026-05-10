@@ -8,9 +8,9 @@ use tokio::sync::{broadcast, RwLock};
 use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
-pub const SCORE_THRESHOLD: u8 = 80;
-pub const MIN_TPM_FOR_EXECUTION: u64 = 80;
-pub const MIN_BUY_PRESSURE: f64 = 2.0;
+pub const SCORE_THRESHOLD: u8 = 50; // Lowered for testing
+pub const MIN_TPM_FOR_EXECUTION: u64 = 30; // Lowered for testing
+pub const MIN_BUY_PRESSURE: f64 = 1.5; // Lowered for testing
 
 const BUY_PRESSURE_HISTORY_SIZE: usize = 5;
 
