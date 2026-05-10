@@ -40,14 +40,14 @@ tip_lamports = 100_000
 simulation_timeout_ms = 5000
 
 [shredstream]
-# Jito ShredStream - Devnet doesn't have real Jito
+# Jito ShredStream - Real Mainnet
 bind_address = "0.0.0.0:0"
 
-# Placeholder - won't receive real data on Devnet
-proxy_address = "127.0.0.1:10000"
+# Frankfurt proxy
+proxy_address = "185.186.128.136:1002"
 
 # Buffer size
-recv_buffer_size = 1_000_000
+recv_buffer_size = 50_000_000
 
 # Worker threads
 worker_threads = 4
