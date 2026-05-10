@@ -46,7 +46,7 @@ pub async fn run(
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            if let Err(e) = executor_for_bh.refresh_blockhash() {
+            if let Err(e) = executor_for_bh.refresh_blockhash().await {
                 warn!(error = %e, "Failed to refresh blockhash");
             } else {
                 debug!("Blockhash refreshed for fast sells");

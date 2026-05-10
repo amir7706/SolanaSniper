@@ -110,9 +110,8 @@ impl BundleExecutor {
         }
     }
 
-    pub fn refresh_blockhash(&self) -> Result<()> {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let bh = rt.block_on(async { self.get_blockhash_internal().await })?;
+    pub async fn refresh_blockhash(&self) -> Result<()> {
+        let bh = self.get_blockhash_internal().await?;
         let mut h = self.latest_blockhash.lock().unwrap(); 
         *h = Some(bh); 
         Ok(())
