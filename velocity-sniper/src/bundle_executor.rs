@@ -169,20 +169,38 @@ impl BundleExecutor {
     pub async fn execute_sell_fast(&self, mint: &Pubkey, pool: &Pubkey, token_amount: u64, min_sol_output: u64) -> Result<BundleResult> {
         let bh = self.get_blockhash_internal().await?;
         let pool_data = self.fetch_pool_data(pool).await?;
+        
+        // Dynamic Jito Tip: High pressure = high tip, Low pressure = minimum tip
+        let tip_amount = if min_sol_output > 0 { self.jito_config.tip_lamports } else { 10_000 };
         let tip = self.select_tip_account();
-        let tip_ix = transfer(&self.keypair.pubkey(), &tip, self.jito_config.tip_lamports);
+        let tip_ix = transfer(&self.keypair.pubkey(), &tip, tip_amount);
         
         let cu_limit_ix = ComputeBudgetInstruction::set_compute_unit_limit(200_000);
         let cu_price_ix = ComputeBudgetInstruction::set_compute_unit_price(self.trading_config.priority_fee_lamports);
         
-        let sell_ix = self.build_sell_instruction(&pool_data, mint, token_amount, min_sol_output);
+        // Use 20% slippage for sell (loose - get out fast)
+        let sell_min_out = (min_sol_output as f64 * 0.80) as u64;
+        let sell_ix = self.build_sell_instruction(&pool_data, mint, token_amount, sell_min_out);
+        
         let user = self.keypair.pubkey();
+        let token_ata = self.compute_ata(mint, &user);
+        
+        // Add Close Account instruction to reclaim rent (~0.002 SOL / $0.40)
+        let close_ix = spl_token::instruction::close_account(&spl_token::id(), &token_ata, &user, &user, &[]).unwrap();
+        
         let mut txs = Vec::new();
-        for ixs in vec![vec![cu_limit_ix, cu_price_ix, tip_ix.clone()], vec![sell_ix]] {
-            let mut tx = Transaction::new_with_payer(&ixs, Some(&user));
-            tx.sign(&[self.keypair.as_ref()], bh);
-            txs.push(tx.message.serialize());
-        }
+        // Transaction 1: Tip + Compute + Close Account (reclaim rent)
+        let tx1_ixs = vec![cu_limit_ix, cu_price_ix, tip_ix.clone(), close_ix];
+        let mut tx1 = Transaction::new_with_payer(&tx1_ixs, Some(&user));
+        tx1.sign(&[self.keypair.as_ref()], bh);
+        txs.push(tx1.message.serialize());
+        
+        // Transaction 2: Sell (20% slippage for fast exit)
+        let tx2_ixs = vec![sell_ix];
+        let mut tx2 = Transaction::new_with_payer(&tx2_ixs, Some(&user));
+        tx2.sign(&[self.keypair.as_ref()], bh);
+        txs.push(tx2.message.serialize());
+        
         self.remove_pending_sell(mint);
         self.send_bundle(txs).await
     }

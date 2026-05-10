@@ -190,6 +190,40 @@ pub async fn run(
                     continue;
                 }
                 
+                // STALL DETECTION: If price doesn't move +2% in first 10 seconds, exit
+                // This prevents holding "zombie" coins while better opportunities pass
+                if held_seconds >= 10 && current_pnl_pct < 0.02 {
+                    info!(
+                        mint = %sell.mint,
+                        held_sec = held_seconds,
+                        pnl = format!("{:.1}%", current_pnl_pct * 100.0),
+                        "🦎 STALL DETECTED - Price didn't pop in 10s, exiting"
+                    );
+                    
+                    let _ = executor_for_monitor.execute_sell_fast(
+                        &sell.mint,
+                        &sell.pool,
+                        sell.token_amount,
+                        ((entry_price * 0.95) * 1_000_000_000.0) as u64,
+                    ).await;
+                    
+                    let mut state_write = state_for_monitor.write().await;
+                    if let Some(pos_idx) = state_write.active_positions.iter().position(|p| p.mint == sell.mint) {
+                        let pos = state_write.active_positions.remove(pos_idx);
+                        state_write.completed_trades.push(CompletedTrade {
+                            mint: sell.mint,
+                            entry_price: pos.entry_price_sol,
+                            exit_price: pos.entry_price_sol * 0.95,
+                            pnl_sol: pos.entry_price_sol * -0.05,
+                            pnl_pct: -0.05,
+                            held_seconds,
+                            reason: SellReason::VelocityDrop,
+                        });
+                        state_write.total_pnl_sol += pos.entry_price_sol * -0.05;
+                    }
+                    continue;
+                }
+                
                 // Continuous monitoring log
                 debug!(
                     mint = %sell.mint,
