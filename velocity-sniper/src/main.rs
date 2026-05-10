@@ -108,6 +108,9 @@ async fn main() -> Result<()> {
     let state = AppState::new(config.clone());
 
     // --- FORCE TEST START - Inject fake pool event for testing ---
+    // Wait 2 seconds for all modules to start first
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
     let test_mint = Pubkey::from_str("EPjFW36wd753zP85Deq9FdWxSGNatX24fL2dsPbvoKey").unwrap();
@@ -132,6 +135,7 @@ async fn main() -> Result<()> {
         raw_data: vec![],
     };
     let _ = state.pool_event_sender.send(mock_event);
+    tracing::info!("🚨 TEST: Event sent to safety filter");
     // --- FORCE TEST END ---
 
     // Spawn all pipeline stages concurrently
