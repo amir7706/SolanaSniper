@@ -108,8 +108,8 @@ async fn main() -> Result<()> {
     let state = AppState::new(config.clone());
 
     // --- FORCE TEST START - Inject fake pool event for testing ---
-    // Wait 2 seconds for all modules to start first
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Wait 10 seconds for all modules to fully start
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
     
     use solana_sdk::pubkey::Pubkey;
     use std::str::FromStr;
