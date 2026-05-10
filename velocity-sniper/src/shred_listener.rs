@@ -92,18 +92,18 @@ impl ShredListener {
                 Ok(len) => {
                     shred_count += 1;
 
-                    // DEBUG: Log every 100th packet to verify data flow
-                    if shred_count % 100 == 0 {
-                        info!("[HEARTBEAT] Received packet #{}, total tx extracted: {}", shred_count, tx_count);
+                    // DEBUG: Log EVERY packet to verify UDP is working
+                    if shred_count <= 10 {
+                        info!("[UDP-DIRECT] Packet #{} received, size: {} bytes", shred_count, len);
                     }
 
                     // Parse the shred header and extract any complete transactions
                     let shred_data = &buf[..len];
                     let extracted = Self::parse_shred(shred_data);
                     
-                    // DEBUG: Log if any transactions extracted
-                    if !extracted.is_empty() && tx_count < 5 {
-                        info!("[DATA-FLOW] Extracted {} transactions from shred #{}", extracted.len(), shred_count);
+                    // DEBUG: Log extraction results
+                    if shred_count <= 5 {
+                        info!("[PARSE] Shred #{}: extracted {} transactions", shred_count, extracted.len());
                     }
 
                     for tx_bytes in extracted {
@@ -149,7 +149,7 @@ impl ShredListener {
     /// Solana shreds contain FEC data, duplicate shreds (for reliability),
     /// and transaction payloads. We skip FEC/padding and extract only
     /// complete transaction payloads.
-    fn parse_shred(data: &[u8]) -> Vec<Vec<u8>> {
+    fn parse_shred(data: &[_u8]) -> Vec<Vec<u8>> {
         let mut transactions = Vec::new();
 
         // Shred header format:
@@ -163,6 +163,14 @@ impl ShredListener {
         }
 
         let shred_type = data[0];
+        
+        // DEBUG: Log the shred type
+        static DEBUG_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if count < 5 {
+            info!("[SHRED-TYPE] Type: {}, Data length: {}", shred_type, data.len());
+        }
+
         let slot = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
 
         // Only process data shreds (type 0) and last-in-slot shreds (type 2)
