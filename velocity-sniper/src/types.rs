@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
 use dashmap::DashMap;
-use std::sync::Arc;
 
 // ─── Solana Constants ───────────────────────────────────────────────
 
@@ -253,4 +251,80 @@ pub struct BundleResult {
     pub simulated: bool,
     pub landed: bool,
     pub error: Option<String>,
+}
+
+/// ─── Security Cache (RPC Bypass) ───────────────────────────────────
+
+/// Instant security info parsed from raw shreds
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MintSecurity {
+    pub mint: Pubkey,
+    pub mint_authority: Option<Pubkey>,
+    pub freeze_authority: Option<Pubkey>,
+    pub decimals: u8,
+    pub detected_at: DateTime<Utc>,
+}
+
+impl MintSecurity {
+    pub fn is_renounced(&self) -> bool {
+        self.mint_authority.is_none()
+    }
+
+    pub fn is_freeze_disabled(&self) -> bool {
+        self.freeze_authority.is_none()
+    }
+}
+
+
+// Global cache for RPC bypass (The "Poor Man's Geyser")
+lazy_static::lazy_static! {
+    pub static ref SECURITY_CACHE: DashMap<Pubkey, MintSecurity, ahash::RandomState> = DashMap::with_hasher(ahash::RandomState::new());
+}
+
+/// ─── Zero-Copy "Nitro" Parser Primitives ───────────────────────────
+/// These helpers allow us to walk raw bytes without allocating memory
+/// or using slow deserializers like bincode.
+
+pub struct ZeroCopyWalker<'a> {
+    pub data: &'a [u8],
+    pub offset: usize,
+}
+
+impl<'a> ZeroCopyWalker<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, offset: 0 }
+    }
+
+    #[inline(always)]
+    pub fn read_u8(&mut self) -> Option<u8> {
+        let val = self.data.get(self.offset)?;
+        self.offset += 1;
+        Some(*val)
+    }
+
+    #[inline(always)]
+    pub fn read_bytes(&mut self, len: usize) -> Option<&'a [u8]> {
+        let end = self.offset + len;
+        if end > self.data.len() { return None; }
+        let slice = &self.data[self.offset..end];
+        self.offset = end;
+        Some(slice)
+    }
+
+    #[inline(always)]
+    pub fn read_compact_u16(&mut self) -> Option<usize> {
+        let first = self.read_u8()? as usize;
+        if first < 0x80 {
+            Some(first)
+        } else {
+            let second = self.read_u8()? as usize;
+            Some(((first & 0x7F) << 7) | second)
+        }
+    }
+
+    #[inline(always)]
+    pub fn read_pubkey(&mut self) -> Option<Pubkey> {
+        let bytes = self.read_bytes(32)?;
+        Some(Pubkey::new_from_array(bytes.try_into().ok()?))
+    }
 }

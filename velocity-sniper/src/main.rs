@@ -10,13 +10,14 @@ pub mod types;
 
 use anyhow::Result;
 use config::Config;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use types::{MintInfo, PoolEvent, TradeSignal, TradingState};
 
 /// Application state shared across all modules
 pub struct AppState {
     pub config: Config,
-    pub trading_state: tokio::sync::RwLock<TradingState>,
+    pub trading_state: Arc<tokio::sync::RwLock<TradingState>>,
     /// Channel: ShredStream -> Raydium Detector
     pub raw_tx_sender: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub raw_tx_receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
@@ -44,7 +45,7 @@ impl AppState {
 
         Self {
             config,
-            trading_state: tokio::sync::RwLock::new(TradingState::default()),
+            trading_state: Arc::new(tokio::sync::RwLock::new(TradingState::default())),
             raw_tx_sender,
             raw_tx_receiver,
             tx_for_velocity_sender,
@@ -119,7 +120,7 @@ async fn main() -> Result<()> {
         state.trade_signal_receiver.resubscribe(),
         state.trade_signal_sender.clone(),
         state.pool_event_receiver.resubscribe(),
-        state.safe_token_sender.clone(),
+        state.safe_token_receiver.resubscribe(),
         state.trading_state.clone(),
         config.strategy.clone(),
         config.trading.clone(),
@@ -142,4 +143,24 @@ async fn main() -> Result<()> {
 
     tracing::info!("Velocity Sniper shut down.");
     Ok(())
+}
+
+/// ─── Thread Isolation (The "Nitro" Rule) ───────────────────────────
+/// Pins the current thread to the highest available CPU core to 
+/// eliminate context switching and OS "pauses" (Linux only).
+pub fn pin_thread_to_last_core(name: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(cores) = core_affinity::get_core_ids() {
+            if let Some(last_core) = cores.last() {
+                if core_affinity::set_for_current(*last_core) {
+                    tracing::info!(thread = name, core = ?last_core.id, "🚀 NITRO: Thread locked to physical core");
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        tracing::debug!(thread = name, "Core pinning skipped (Not on Linux)");
+    }
 }

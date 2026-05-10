@@ -1,11 +1,10 @@
 use crate::bundle_executor::{BundleExecutor, PendingSell};
 use crate::config::{RpcConfig, SafetyConfig, StrategyConfig, TradingConfig};
 use crate::types::*;
-use chrono::{DateTime, Utc};
-use solana_sdk::pubkey::Pubkey;
-use std::str::FromStr;
+use chrono::Utc;
+use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
-use tokio::time::{interval, sleep, Duration};
+use tokio::time::Duration;
 use tracing::{debug, info, warn};
 
 /// Strategy Orchestrator: The "brain" that connects all modules.
@@ -22,25 +21,27 @@ use tracing::{debug, info, warn};
 ///   - Concurrent position limits
 pub async fn run(
     mut trade_signal_rx: broadcast::Receiver<TradeSignal>,
-    trade_signal_tx: broadcast::Sender<TradeSignal>,
+    _trade_signal_tx: broadcast::Sender<TradeSignal>,
     _pool_event_rx: broadcast::Receiver<PoolEvent>,
     _safe_token_rx: broadcast::Receiver<MintInfo>,
-    state: RwLock<TradingState>,
+    state: Arc<RwLock<TradingState>>,
     strategy_config: StrategyConfig,
     trading_config: TradingConfig,
     jito_config: crate::config::JitoConfig,
     rpc_config: RpcConfig,
-    safety_config: SafetyConfig,
+    _safety_config: SafetyConfig,
 ) -> anyhow::Result<()> {
+    crate::pin_thread_to_last_core("strategy");
     info!("Strategy orchestrator started");
 
-    let executor = BundleExecutor::new(jito_config.clone(), rpc_config.clone(), trading_config.clone())?;
+    let rpc_url = rpc_config.premium_endpoint.unwrap_or(rpc_config.endpoint);
+    let executor = Arc::new(BundleExecutor::new(jito_config.clone(), trading_config.clone(), rpc_url)?);
     let mut last_trade_time = Utc::now() - chrono::Duration::seconds(
         strategy_config.trade_cooldown_seconds as i64
     );
 
     // Spawn blockhash refresher (refreshes every 30 seconds to avoid stale txs)
-    let executor_for_bh = &executor;
+    let executor_for_bh = executor.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
@@ -53,9 +54,8 @@ pub async fn run(
         }
     });
 
-    // Spawn price monitor (checks every 200ms for take-profit/stop-loss)
-    // This is the "Jito Tip Floor Monitoring" strategy
-    let executor_for_price = &executor;
+    // Spawn price monitor
+    let executor_for_price = executor.clone();
     let state_for_price = state.clone();
     let trading_for_price = trading_config.clone();
     
@@ -99,7 +99,7 @@ pub async fn run(
                     // Update state
                     let mut state_write = state_for_price.write().await;
                     if let Some(pos_idx) = state_write.active_positions.iter().position(|p| p.mint == sell.mint) {
-                        let pos = state_write.active_positions.remove(pos_idx);
+                        let _pos = state_write.active_positions.remove(pos_idx);
                         let pnl_pct = -trading_for_price.stop_loss_pct;
                         state_write.completed_trades.push(CompletedTrade {
                             mint: sell.mint,
@@ -184,9 +184,21 @@ pub async fn run(
                         if result.accepted {
                             last_trade_time = Utc::now();
 
+                            // ─── Fee-Aware PnL Calculation ───
+                            // We must recover our overhead (Buy Tip + Buy Fee + Sell Tip + Sell Fee) 
+                            // before we are truly in profit.
+                            let overhead_sol = (
+                                (jito_config.tip_lamports * 2) + 
+                                (trading_config.priority_fee_lamports * 2)
+                            ) as f64 / 1_000_000_000.0;
+
                             let entry_price = trading_config.max_sol_per_trade;
-                            let take_profit_price = entry_price * (1.0 + trading_config.take_profit_pct);
-                            let stop_loss_price = entry_price * (1.0 - trading_config.stop_loss_pct);
+                            
+                            // To hit a 15% net profit, we need: (Price * (1 + 15%)) + Overhead
+                            let take_profit_price = (entry_price * (1.0 + trading_config.take_profit_pct)) + overhead_sol;
+                            
+                            // Stop loss should also consider fees to avoid "bleeding" out
+                            let stop_loss_price = (entry_price * (1.0 - trading_config.stop_loss_pct)) + overhead_sol;
 
                             let mut state_write = state.write().await;
                             state_write.total_trades += 1;
@@ -279,7 +291,7 @@ pub async fn run(
                 let min_sol_output = ((invested * (1.0 - trading_config.stop_loss_pct))
                     * LAMPORTS_PER_SOL as f64) as u64;
 
-                match executor.execute_sell(&mint, &pool, token_amount, min_sol_output).await {
+                match executor.execute_sell_fast(&mint, &pool, token_amount, min_sol_output).await {
                     Ok(result) => {
                         if result.accepted {
                             info!(
@@ -307,63 +319,3 @@ pub async fn run(
 
     Ok(())
 }
-
-/// Background task that monitors all active positions for take-profit / stop-loss.
-async fn monitor_positions(
-    state: RwLock<TradingState>,
-    _executor: SellExecutorPlaceholder,
-    trading_config: TradingConfig,
-    _sell_signal_tx: broadcast::Sender<TradeSignal>,
-) {
-    let mut tick = interval(Duration::from_secs(2));
-
-    loop {
-        tick.tick().await;
-
-        let positions: Vec<(Pubkey, Pubkey, DateTime<Utc>, u64)> = {
-            let state_read = state.read().await;
-            state_read
-                .active_positions
-                .iter()
-                .map(|p| (p.mint, p.pool, p.entry_time, p.amount_tokens))
-                .collect()
-        };
-
-        for (mint, pool, entry_time, _amount) in positions {
-            let held_seconds = (Utc::now() - entry_time).num_seconds() as u64;
-
-            // Check max hold time
-            if held_seconds >= trading_config.max_hold_seconds {
-                info!(
-                    mint = %mint,
-                    held_sec = held_seconds,
-                    "Max hold time reached — triggering sell"
-                );
-                // In production, this would fetch current price and emit a sell signal
-                // For now, the position monitor just logs
-            }
-        }
-
-        // Log portfolio summary every 30 seconds
-        let state_read = state.read().await;
-        if !state_read.active_positions.is_empty() || state_read.total_trades > 0 {
-            let win_rate = if state_read.total_trades > 0 {
-                state_read.winning_trades as f64 / state_read.total_trades as f64 * 100.0
-            } else {
-                0.0
-            };
-
-            info!(
-                active = state_read.active_positions.len(),
-                total_trades = state_read.total_trades,
-                wins = state_read.winning_trades,
-                win_rate = format!("{:.1}%", win_rate),
-                pnl_sol = format!("{:.4}", state_read.total_pnl_sol),
-                "Portfolio summary"
-            );
-        }
-    }
-}
-
-/// Placeholder for sell executor (in production, this is the BundleExecutor)
-struct SellExecutorPlaceholder;

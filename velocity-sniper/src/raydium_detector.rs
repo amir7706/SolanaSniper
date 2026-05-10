@@ -70,183 +70,64 @@ pub async fn run(
 ///   [pubkey(32) × num_account_keys]
 ///   [instruction_data × num_instructions]
 fn detect_raydium_init(tx_data: &[u8], raydium_program: &Pubkey) -> Option<PoolEvent> {
-    let mut offset = 0;
+    use crate::types::ZeroCopyWalker;
+    let mut walker = ZeroCopyWalker::new(tx_data);
 
-    // 1. Parse compact u16 for num_required_signatures
-    let (num_sigs, consumed) = read_compact_u16(tx_data, offset)?;
-    offset += consumed;
+    // 1. Skip Signatures
+    let num_sigs = walker.read_compact_u16().unwrap_or(0);
+    walker.offset += num_sigs * 64;
 
-    // 2. num_readonly_signed
-    if offset >= tx_data.len() { return None; }
-    let _num_readonly_signed = tx_data[offset];
-    offset += 1;
+    // 2. Read Message Header (3 bytes)
+    let _num_req_sigs = walker.read_u8();
+    let _num_readonly_signed = walker.read_u8();
+    let _num_readonly_unsigned = walker.read_u8();
 
-    // 3. num_readonly_unsigned
-    if offset >= tx_data.len() { return None; }
-    let _num_readonly_unsigned = tx_data[offset];
-    offset += 1;
-
-    // 4. Parse compact u16 for num_instructions
-    let (num_instructions, consumed) = read_compact_u16(tx_data, offset)?;
-    offset += consumed;
-
-    // Total account keys = num_sigs + readonly_signed + readonly_unsigned + writable_unsigned
-    // But we need to figure out the total number of account keys.
-    // The problem: we don't know num_readonly_signed + num_readonly_unsigned separately
-    // from the total. Let's re-approach.
-
-    // Actually, the Solana wire format is:
-    // [1 byte: num_required_signatures]
-    // [1 byte: num_readonly_signed_accounts] 
-    // [1 byte: num_readonly_unsigned_accounts]
-    // [1 byte: num_required_signatures - num_readonly_signed = num_writable_signed]
-    // Wait, no. Let me be precise.
-
-    // Re-parse from the beginning with the correct format:
-    offset = 0;
-
-    // Byte 0: number of required signatures
-    if offset >= tx_data.len() { return None; }
-    let _num_required_sigs = tx_data[offset] as usize;
-    offset += 1;
-
-    // Byte 1: number of read-only signed accounts
-    if offset >= tx_data.len() { return None; }
-    let _num_readonly_signed = tx_data[offset] as usize;
-    offset += 1;
-
-    // Byte 2: number of read-only unsigned accounts
-    if offset >= tx_data.len() { return None; }
-    let _num_readonly_unsigned = tx_data[offset] as usize;
-    offset += 1;
-
-    // Then comes the account keys (each 32 bytes)
-    // We need to figure out how many account keys there are.
-    // The total number of account keys = num_sigs + num_readonly_unsigned + num_writable_unsigned
-    // But num_writable_unsigned is not directly in the header.
-
-    // Alternative: scan through pubkeys until we hit an instruction boundary.
-    // Each pubkey is 32 bytes. We know there are at least `num_required_sigs` + `num_readonly_signed` keys.
-    // The actual total is implicit — we need to know the total before parsing instructions.
-
-    // Practical approach: The Solana transaction format after the 3-byte header is:
-    // [compact_u16: num_account_keys]  (in newer versions)
-    // But in the legacy format, it's:
-    // The total number of accounts is: num_required_signatures + num_readonly_signed + num_readonly_unsigned + num_writable_unsigned
-    // where num_writable_unsigned = (implicit, parsed differently)
-
-    // Let's use a simpler, more robust approach: scan all 32-byte boundaries and collect
-    // potential pubkeys, then find instructions.
-
-    // Actually, let's use the proper legacy format:
-    // After the 3 header bytes, all account keys follow (32 bytes each).
-    // The total number of account keys can be inferred by:
-    //   total_accounts = first_non_pubkey_offset / 32
-    // But we don't know where the pubkeys end and instructions begin.
-
-    // Better approach: try to parse as many 32-byte pubkeys as possible,
-    // then look for instruction data patterns.
-
-    let account_keys_start = offset;
-    let max_possible_keys = (tx_data.len() - account_keys_start) / 32;
-
-    // Collect account keys and try to identify the Raydium program
-    let mut account_keys: Vec<Pubkey> = Vec::new();
-    let mut raydium_key_index: Option<usize> = None;
-
-    for i in 0..max_possible_keys {
-        let key_start = account_keys_start + i * 32;
-        let key_end = key_start + 32;
-        if key_end > tx_data.len() {
+    // 3. Read Account Keys
+    let num_accounts = walker.read_compact_u16().unwrap_or(0);
+    let account_keys_bytes = walker.read_bytes(num_accounts * 32)?;
+    
+    // Check if Raydium program is in the account keys (Optimization: scan bytes directly)
+    let mut raydium_idx = None;
+    for i in 0..num_accounts {
+        let key = &account_keys_bytes[i * 32..(i + 1) * 32];
+        if key == raydium_program.as_ref() {
+            raydium_idx = Some(i);
             break;
         }
-
-        let key_bytes = &tx_data[key_start..key_end];
-        let pubkey = Pubkey::new_from_array(key_bytes.try_into().ok()?);
-
-        if pubkey == *raydium_program {
-            raydium_key_index = Some(i);
-        }
-
-        account_keys.push(pubkey);
     }
+    let raydium_idx = raydium_idx?;
 
-    // We need the Raydium program to be in the account keys
-    let raydium_idx = raydium_key_index?;
+    // 4. Skip Blockhash
+    walker.offset += 32;
 
-    // Now parse instructions
-    // Instruction format:
-    //   [1 byte: program_id_index into account_keys]
-    //   [compact_u16: num_account_indices]
-    //   [1 byte × num_account_indices: account indices]
-    //   [compact_u16: data_length]
-    //   [data bytes]
-    let instr_start = account_keys_start + account_keys.len() * 32;
-    let mut instr_offset = instr_start;
-
-    for _ in 0..num_instructions {
-        if instr_offset >= tx_data.len() {
-            break;
-        }
-
-        // Program ID index
-        let program_id_index = tx_data[instr_offset] as usize;
-        instr_offset += 1;
-
-        if program_id_index >= account_keys.len() {
-            break;
-        }
-
-        let program_key = &account_keys[program_id_index];
-
-        // Number of account indices
-        let (num_acct_indices, consumed) = read_compact_u16(tx_data, instr_offset)?;
-        instr_offset += consumed;
-
-        // Account indices
-        let mut acct_indices = Vec::with_capacity(num_acct_indices);
-        for _ in 0..num_acct_indices {
-            if instr_offset >= tx_data.len() {
-                break;
-            }
-            acct_indices.push(tx_data[instr_offset] as usize);
-            instr_offset += 1;
-        }
-
-        // Data length
-        let (data_len, consumed) = read_compact_u16(tx_data, instr_offset)?;
-        instr_offset += consumed;
-
-        // Instruction data
-        if instr_offset + data_len > tx_data.len() {
-            break;
-        }
-
-        let instr_data = &tx_data[instr_offset..instr_offset + data_len];
-        instr_offset += data_len;
+    // 5. Parse Instructions
+    let num_ixs = walker.read_compact_u16().unwrap_or(0);
+    for _ in 0..num_ixs {
+        let prog_idx = walker.read_u8().unwrap_or(0) as usize;
+        let num_acct_indices = walker.read_compact_u16().unwrap_or(0);
+        let acct_indices = walker.read_bytes(num_acct_indices).unwrap_or(&[]);
+        let data_len = walker.read_compact_u16().unwrap_or(0);
+        let data = walker.read_bytes(data_len).unwrap_or(&[]);
 
         // Check if this is a Raydium instruction
-        if *program_key == *raydium_program && instr_data.len() >= 8 {
-            let discriminator = &instr_data[..8];
+        if prog_idx == raydium_idx && data.len() >= 8 {
+            let discriminator = &data[..8];
 
-            // Check for initialize2 discriminator
-            if discriminator == INITIALIZE2_DISCRIMINATOR {
+            if discriminator == INITIALIZE2_DISCRIMINATOR || discriminator == INITIALIZE_DISCRIMINATOR {
+                // We need to provide account keys for the sub-parser
+                let mut account_keys = Vec::with_capacity(num_accounts);
+                for i in 0..num_accounts {
+                    let key = &account_keys_bytes[i * 32..(i + 1) * 32];
+                    account_keys.push(Pubkey::new_from_array(key.try_into().unwrap()));
+                }
+
+                let acct_indices_vec: Vec<usize> = acct_indices.iter().map(|&i| i as usize).collect();
+
                 return parse_initialize2(
                     tx_data,
                     &account_keys,
-                    &acct_indices,
-                    instr_data,
-                    raydium_idx,
-                );
-            }
-
-            // Also check for initialize (non-v2) as fallback
-            if discriminator == INITIALIZE_DISCRIMINATOR {
-                return parse_initialize2(
-                    tx_data,
-                    &account_keys,
-                    &acct_indices,
-                    instr_data,
+                    &acct_indices_vec,
+                    data,
                     raydium_idx,
                 );
             }
@@ -348,22 +229,6 @@ fn parse_initialize2(
 }
 
 /// Read a compact-u16 from a byte slice (Solana's variable-length encoding).
-fn read_compact_u16(data: &[u8], offset: usize) -> Option<(usize, usize)> {
-    if offset >= data.len() {
-        return None;
-    }
-
-    let first = data[offset];
-    if first < 0x80 {
-        Some((first as usize, 1))
-    } else {
-        if offset + 1 >= data.len() {
-            return None;
-        }
-        let value = ((first as usize & 0x7F) << 8) | (data[offset + 1] as usize);
-        Some((value, 2))
-    }
-}
 
 #[cfg(test)]
 mod tests {

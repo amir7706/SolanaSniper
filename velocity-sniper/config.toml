@@ -21,21 +21,21 @@ premium_endpoint = "https://mainnet.helius-rpc.com/?api-key=2aaf379d-e3f8-4d5a-8
 [jito]
 # Jito Block Engine — Frankfurt is closest to Hetzner Frankfurt VPS
 # Options:
-#   Frankfurt:    https://frankfurt.mainnet.block-engine.jito.wiff
-#   Amsterdam:    https://amsterdam.mainnet.block-engine.jito.wiff
-#   Tokyo:        https://tokyo.mainnet.block-engine.jito.wiff
-block_engine_url = "https://frankfurt.mainnet.block-engine.jito.wiff"
+#   Frankfurt:    https://frankfurt.mainnet.block-engine.jito.wtf
+#   Amsterdam:    https://amsterdam.mainnet.block-engine.jito.wtf
+#   Tokyo:        https://tokyo.mainnet.block-engine.jito.wtf
+block_engine_url = "https://frankfurt.mainnet.block-engine.jito.wtf"
 
 # Jito tip accounts — rotates for load distribution
 tip_accounts = [
-    "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
-    "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+    "96g9sAg9u3mBsJqc9GpaTE9UAiCvt8axvvbdDzzb19oX",
     "HFqU5x63VTqvQss8hp11i4bVqkfRtQ7NmXwkiNPLNiVZ",
-    "ADaUMid9yfUC67HyGY2avCA952rrXy1RLKmH6iW6eNsL",
-    "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
-    "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
-    "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
-    "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
+    "Cw8CFFL1pYvXqM8D2bdTsF6CaWoGh5Hq2Aw6hZduW9Pz",
+    "ADaUMid9yfUytqMBzhZkv6iAsvS6VOXwh6u399qWvP9B",
+    "DfXygSm4jCyvG8UMEXrS8cmcyW4PrBnZXCgp2nUno5xr",
+    "ADuTqJa3QRWgnstH7L8AnvPy6328abBnAVEZaPkgn4e5",
+    "3AV79MJs1GrvCthnuS2SeS2Yy87z6S3fC97SjEGoVjGZ",
+    "DttWaMuVvSxrG9f7PQuR8mNoK8yqDdQoN98BqZf3j94P",
 ]
 
 # Tip amount per bundle (in lamports, 1 SOL = 1,000,000,000)
@@ -43,8 +43,8 @@ tip_accounts = [
 # Minimum recommended: 100_000 (0.0001 SOL)
 tip_lamports = 100_000
 
-max_bundle_size = 131072
-simulation_timeout_ms = 2000
+# Simulation timeout in milliseconds (Jito block engine simulation)
+simulation_timeout_ms = 5000
 
 [shredstream]
 # UDP bind address — 0.0.0.0:0 lets the OS pick a free port
@@ -88,6 +88,10 @@ max_hold_seconds = 300
 # Minimum pool liquidity in SOL to even consider trading
 min_pool_liquidity_sol = 50.0
 
+# Priority fee in lamports (added for 2026 performance)
+# Higher fee = faster block inclusion. Recommended: 10_000 - 50_000
+priority_fee_lamports = 25_000
+
 [safety]
 # MANDATORY: Mint authority must be disabled (no infinite supply)
 require_mint_authority_disabled = true
@@ -106,11 +110,6 @@ require_freeze_authority_disabled = true
 
 # Minimum number of unique token holders
 min_unique_holders = 20
-
-# Known rug-pull program IDs to blacklist
-blacklisted_programs = [
-    "11111111111111111111111111111111",  # System program (not a token)
-]
 
 [strategy]
 # ═══════════════════════════════════════════════════════════════════

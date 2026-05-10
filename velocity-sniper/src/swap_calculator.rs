@@ -2,7 +2,6 @@ use crate::types::*;
 use anyhow::Result;
 use reqwest::Client;
 use solana_sdk::pubkey::Pubkey;
-use tracing::{debug, info, warn};
 
 /// Local Swap Calculator: Computes swap routes and expected output WITHOUT
 /// calling an external API (Jupiter). All math is done locally on the VPS CPU.

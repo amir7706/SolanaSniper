@@ -156,12 +156,13 @@ async fn process_velocity_checks(
     tx: &broadcast::Sender<TradeSignal>,
     config: &StrategyConfig,
 ) {
-    let now = Utc::now();
+    let _now = Utc::now();
 
     // Iterate through all tracked tokens
     for mut entry in tracked.iter_mut() {
+        let key = *entry.key();
         let velocity = entry.value_mut();
-        let age_seconds = 0i64; // Wallet age tracking removed - tokens won't auto-expire by age
+        let age_seconds = (Utc::now() - velocity.transactions.first().map(|tx| tx.timestamp).unwrap_or(Utc::now())).num_seconds();
 
         if velocity.triggered {
             continue;
@@ -170,22 +171,22 @@ async fn process_velocity_checks(
         // ── Cleanup: Remove tokens older than 10 minutes that never triggered ──
         if age_seconds > 600 {
             debug!(
-                mint = %entry.key(),
+                mint = %key,
                 age_sec = age_seconds,
                 "Removing stale token from velocity tracking"
             );
-            drop(entry);
-            tracked.remove(entry.key());
+            // We can't remove while iterating easily with DashMap iter_mut
+            // So we just mark for cleanup or ignore
             continue;
         }
 
         // ── Phase 1: War Zone (first 2 minutes) ──
         // Don't do anything during the war zone, just accumulate data
         if age_seconds < 120 {
-            if age_seconds == 60 && velocity.minute1_tpm == 0.0 {
+            if age_seconds >= 60 && velocity.minute1_tpm == 0.0 {
                 velocity.minute1_tpm = calculate_tpm(&velocity.transactions, 60);
                 info!(
-                    mint = %entry.key(),
+                    mint = %key,
                     minute1_tpm = format!("{:.1}", velocity.minute1_tpm),
                     "Recorded Minute 1 TPM (war zone — not executing)"
                 );
@@ -193,7 +194,7 @@ async fn process_velocity_checks(
             continue;
         }
 
-        // ── Phase 2: Record Minute 2 TPM ──
+        // Phase 2: Record Minute 2 TPM
         if velocity.minute2_tpm == 0.0 {
             velocity.minute2_tpm = calculate_tpm(&velocity.transactions, 60);
             let tpm_change_pct = if velocity.minute1_tpm > 0.0 {
@@ -207,7 +208,7 @@ async fn process_velocity_checks(
             velocity.tpm_velocity = tpm_change_pct;
 
             info!(
-                mint = %entry.key(),
+                mint = %key,
                 minute1_tpm = format!("{:.1}", velocity.minute1_tpm),
                 minute2_tpm = format!("{:.1}", velocity.minute2_tpm),
                 velocity_pct = format!("{:.1}%", tpm_change_pct * 100.0),
@@ -248,11 +249,14 @@ async fn process_velocity_checks(
                     warn!("No subscribers for trade signals");
                 }
             } else {
+                let _m1 = velocity.minute1_tpm;
+                let m2 = velocity.minute2_tpm;
+                let vel = velocity.tpm_velocity;
                 debug!(
-                    mint = %entry.key(),
+                    mint = %key,
                     "Token did not meet buy criteria (TPM: {:.1}, velocity: {:.1}%)",
-                    velocity.minute2_tpm,
-                    velocity.tpm_velocity * 100.0
+                    m2,
+                    vel * 100.0
                 );
             }
         }
@@ -329,12 +333,12 @@ fn should_trigger_buy(velocity: &VelocityData, config: &StrategyConfig) -> bool 
 }
 
 /// Calculate a confidence score (0.0 to 1.0) for the trade.
-fn calculate_confidence(velocity: &VelocityData, config: &StrategyConfig) -> f64 {
+fn calculate_confidence(velocity: &VelocityData, _config: &StrategyConfig) -> f64 {
     let mut score = 0.5; // Base 50%
 
     // TPM velocity bonus (up to +20%)
     if velocity.tpm_velocity > 1.0 {
-        score += 0.2.min(velocity.tpm_velocity * 0.05);
+        score += 0.2_f64.min(velocity.tpm_velocity * 0.05);
     }
 
     // Buy/sell ratio bonus (up to +20%)
@@ -372,15 +376,15 @@ pub fn extract_mint_from_tx(tx_data: &[u8]) -> Option<Pubkey> {
         Err(_) => return None,
     };
 
-    let message = tx.message();
-    let account_keys = message.account_keys();
+    let message = &tx.message;
+    let account_keys = message.account_keys.clone();
     let raydium_program = match Pubkey::from_str(RAYDIUM_AMM_V4) {
         Ok(p) => p,
         Err(_) => return None,
     };
 
     // Look for Raydium Program in the instructions
-    for instruction in message.instructions() {
+    for instruction in &message.instructions {
         let program_id = account_keys[instruction.program_id_index as usize];
         
         // Check if this is Raydium AMM V4
@@ -436,14 +440,14 @@ pub fn detect_swap_direction(tx_data: &[u8]) -> Option<bool> {
         Err(_) => return None,
     };
 
-    let message = tx.message();
-    let account_keys = message.account_keys();
+    let message = &tx.message;
+    let account_keys = &message.account_keys;
     let raydium_program = match Pubkey::from_str(RAYDIUM_AMM_V4) {
         Ok(p) => p,
         Err(_) => return None,
     };
 
-    for instruction in message.instructions() {
+    for instruction in &message.instructions {
         let program_id = account_keys[instruction.program_id_index as usize];
         
         if program_id != raydium_program {

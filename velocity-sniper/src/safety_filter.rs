@@ -1,13 +1,12 @@
 use crate::config::{RpcConfig, SafetyConfig};
 use crate::types::*;
 use anyhow::Result;
-use chrono::Utc;
 use reqwest::Client;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 use tokio::sync::broadcast;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Safety Filter: Validates that a newly detected token is not a rug pull.
 ///
@@ -75,12 +74,44 @@ async fn validate_token(
 
     let mut rejection_reasons = Vec::new();
 
-    // ── Step 1: Fetch Mint Account Data ──
+    // ── Step 1: Fast-Path Cache Check (The "Poor Man's Geyser") ──
+    use crate::types::SECURITY_CACHE;
+    let cached_security = SECURITY_CACHE.get(&event.base_mint).map(|s| s.clone());
+
+    if let Some(ref security) = cached_security {
+        debug!(mint = %event.base_mint, "🚀 SAFETY FAST-PATH: Using local shred cache");
+        
+        // Instant Rejection if authority checks fail in cache
+        if config.require_mint_authority_disabled && security.mint_authority.is_some() {
+            rejection_reasons.push("MINT_AUTHORITY_NOT_DISABLED: Supply can be inflated (Cached)".to_string());
+        }
+        if config.require_freeze_authority_disabled && security.freeze_authority.is_some() {
+            rejection_reasons.push("FREEZE_AUTHORITY_NOT_DISABLED: Accounts can be frozen (Cached)".to_string());
+        }
+        
+        // If already rejected by cached data, STOP HERE and save 50ms+ of RPC time
+        if !rejection_reasons.is_empty() {
+            info!(mint = %event.base_mint, reasons = ?rejection_reasons, "Token REJECTED via FAST-PATH cache");
+            return;
+        }
+    }
+
+    // ── Step 2: Fetch/Refine Mint Account Data ──
     let mint_data = match fetch_mint_account(&http, &rpc_url, &event.base_mint).await {
         Some(data) => data,
         None => {
-            warn!(mint = %event.base_mint, "Failed to fetch mint account — skipping");
-            return;
+            // If RPC fails but we have cache, we can still proceed with cached data!
+            if let Some(security) = cached_security {
+                MintAccountData {
+                    decimals: security.decimals,
+                    supply: 0, // Unknown, but auths are safe
+                    mint_authority: security.mint_authority,
+                    freeze_authority: security.freeze_authority,
+                }
+            } else {
+                warn!(mint = %event.base_mint, "Failed to fetch mint account — skipping");
+                return;
+            }
         }
     };
 
@@ -396,7 +427,7 @@ async fn fetch_token_holders(
     for account in accounts.iter().take(limit) {
         let address_str = account.get("address")?.as_str()?;
         let amount = account.get("amount")?.as_str()?.parse::<u64>().ok()?;
-        let decimals = account.get("decimals")?.as_u64()? as u8;
+        let _decimals = account.get("decimals")?.as_u64()? as u8;
 
         let pct = if total_supply > 0 {
             amount as f64 / total_supply as f64

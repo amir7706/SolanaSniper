@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -30,9 +29,7 @@ pub struct JitoConfig {
     pub tip_accounts: Vec<String>,
     /// Base tip in lamports per bundle
     pub tip_lamports: u64,
-    /// Maximum bundle size in bytes
-    pub max_bundle_size: usize,
-    /// Bundle simulation timeout in ms
+    /// Simulation timeout in milliseconds
     pub simulation_timeout_ms: u64,
 }
 
@@ -64,6 +61,8 @@ pub struct TradingConfig {
     pub max_hold_seconds: u64,
     /// Minimum pool liquidity in SOL to consider a trade
     pub min_pool_liquidity_sol: f64,
+    /// Priority fee in lamports to pay to Solana leaders
+    pub priority_fee_lamports: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,8 +79,6 @@ pub struct SafetyConfig {
     pub require_freeze_authority_disabled: bool,
     /// Minimum number of unique holders
     pub min_unique_holders: usize,
-    /// Skip tokens with known rug patterns (program IDs)
-    pub blacklisted_programs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

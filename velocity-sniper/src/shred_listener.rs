@@ -1,9 +1,6 @@
 use crate::config::ShredStreamConfig;
-use crate::types::*;
 use anyhow::Result;
-use solana_sdk::pubkey::Pubkey;
-use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -48,6 +45,7 @@ pub async fn run(
     tx_for_velocity_sender: mpsc::Sender<Vec<u8>>, // For TPM tracking
     config: ShredStreamConfig,
 ) -> Result<()> {
+    crate::pin_thread_to_last_core("shred_listener");
     let listener = ShredListener::new(config);
     listener.start(tx_sender, tx_for_velocity_sender).await
 }
@@ -74,11 +72,10 @@ impl ShredListener {
 
         // Set receive buffer size (crucial for high-throughput shred ingestion)
         socket.set_recv_buffer_size(self.recv_buffer)?;
+        socket.bind(&self.bind_addr.into())?;
         socket.set_nonblocking(true)?;
-        socket.set_reuse_address(true)?;
-
-let std_socket: std::net::UdpSocket = socket.into();
-        std::net::UdpSocket::bind(self.bind_addr.clone())?;
+        
+        let std_socket: std::net::UdpSocket = socket.into();
         std_socket.connect(self.proxy_addr)?;
 
         info!("UDP socket bound and connected to Jito ShredStream proxy");
@@ -202,6 +199,10 @@ let std_socket: std::net::UdpSocket = socket.into();
             }
 
             let tx_data = payload[offset..offset + tx_len].to_vec();
+            
+            // 🚀 NEW: Sniff security data (InitializeMint) before the RPC even sees it!
+            Self::sniff_security(&tx_data);
+            
             transactions.push(tx_data);
             offset += tx_len;
         }
@@ -217,16 +218,99 @@ let std_socket: std::net::UdpSocket = socket.into();
 
         transactions
     }
+
+    /// ─── The "Poor Man's Geyser" ──────────────────────────────────────
+    /// Sniffs Token Program instructions directly from the raw bytes
+    /// to bypass RPC safety checks.
+    fn sniff_security(tx_data: &[u8]) {
+        use solana_sdk::pubkey::Pubkey;
+        use chrono::Utc;
+        use crate::types::{SECURITY_CACHE, MintSecurity, ZeroCopyWalker};
+        use std::str::FromStr;
+
+        let token_prog = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
+        let token_2022_prog = Pubkey::from_str("TokenzQdBNbLqP5VEhdkThp9N8D9VAsWdc7vWNWRfU").unwrap();
+
+        let mut walker = ZeroCopyWalker::new(tx_data);
+        
+        // 1. Skip Signatures
+        let num_sigs = walker.read_compact_u16().unwrap_or(0);
+        walker.offset += num_sigs * 64;
+
+        // 2. Read Message Header (3 bytes)
+        let _num_req_sigs = walker.read_u8();
+        let _num_readonly_signed = walker.read_u8();
+        let _num_readonly_unsigned = walker.read_u8();
+
+        // 3. Read Account Keys
+        let num_accounts = walker.read_compact_u16().unwrap_or(0);
+        let account_keys_offset = walker.offset;
+        let account_keys_bytes = match walker.read_bytes(num_accounts * 32) {
+            Some(b) => b,
+            None => return,
+        };
+        walker.offset = account_keys_offset + num_accounts * 32;
+
+        // 4. Skip Blockhash
+        walker.offset += 32;
+
+        // 5. Read Instructions
+        let num_ixs = walker.read_compact_u16().unwrap_or(0);
+        for _ in 0..num_ixs {
+            let prog_idx = walker.read_u8().unwrap_or(0) as usize;
+            
+            // Get Program ID
+            let prog_id_bytes = account_keys_bytes.get(prog_idx * 32..(prog_idx + 1) * 32);
+            if prog_id_bytes.is_none() { break; }
+            let prog_id = Pubkey::new_from_array(prog_id_bytes.unwrap().try_into().unwrap());
+
+            // Read Account Indices
+            let num_ix_accounts = walker.read_compact_u16().unwrap_or(0);
+            let ix_accounts = walker.read_bytes(num_ix_accounts).unwrap_or(&[]);
+
+            // Read Data
+            let data_len = walker.read_compact_u16().unwrap_or(0);
+            let data = walker.read_bytes(data_len).unwrap_or(&[]);
+
+            if prog_id == token_prog || prog_id == token_2022_prog {
+                if data.is_empty() { continue; }
+                let discriminator = data[0];
+                
+                // 0 = InitializeMint, 20 = InitializeMint2
+                if discriminator == 0 || discriminator == 20 {
+                    if data.len() < 34 { continue; }
+                    let decimals = data[1];
+                    let mint_auth_bytes: [u8; 32] = data[2..34].try_into().unwrap_or([0; 32]);
+                    let mint_auth = Pubkey::new_from_array(mint_auth_bytes);
+                    let mint_auth_opt = if mint_auth == Pubkey::default() { None } else { Some(mint_auth) };
+                    
+                    let mut freeze_auth_opt = None;
+                    if data.len() >= 67 && data[34] == 1 {
+                        let freeze_auth = Pubkey::new_from_array(data[35..67].try_into().unwrap_or([0; 32]));
+                        freeze_auth_opt = Some(freeze_auth);
+                    }
+
+                    // Mint is the first account in the instruction
+                    if let Some(&mint_idx) = ix_accounts.get(0) {
+                        let mint_bytes = account_keys_bytes.get(mint_idx as usize * 32..(mint_idx as usize + 1) * 32);
+                        if let Some(mb) = mint_bytes {
+                            let mint_pubkey = Pubkey::new_from_array((*mb).try_into().unwrap());
+                            SECURITY_CACHE.insert(mint_pubkey, MintSecurity {
+                                mint: mint_pubkey,
+                                mint_authority: mint_auth_opt,
+                                freeze_authority: freeze_auth_opt,
+                                decimals,
+                                detected_at: Utc::now(),
+                            });
+                            debug!(mint = %mint_pubkey, "🚀 NITRO SNIFFED: Security cached via zero-copy");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-/// Connect the shred stream to the proxy via a separate socket.
-/// This "handshake" packet tells the proxy we are ready to receive.
-fn send_subscribe_packet(socket: &UdpSocket, proxy_addr: SocketAddr) -> Result<()> {
-    // Jito ShredStream proxy uses a simple protocol:
-    // Send a 0-byte UDP packet to the proxy to subscribe
-    socket.send_to(&[], proxy_addr)?;
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
