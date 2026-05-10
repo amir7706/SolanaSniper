@@ -10,6 +10,7 @@ pub mod types;
 pub mod precomputed;
 pub mod fast_executor;
 pub mod rug_detector;
+pub mod trade_logger;
 
 use anyhow::Result;
 use bs58;
