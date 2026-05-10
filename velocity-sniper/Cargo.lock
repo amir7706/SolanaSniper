@@ -5586,6 +5586,7 @@ dependencies = [
  "indexmap 2.14.0",
  "lazy_static",
  "num-traits",
+ "once_cell",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "rust_decimal",

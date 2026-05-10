@@ -11,6 +11,10 @@ pub mod precomputed;
 pub mod fast_executor;
 pub mod rug_detector;
 pub mod trade_logger;
+pub mod pre_check;
+pub mod gold_list;
+pub mod watch_monitor;
+pub mod trade_monitor;
 
 use anyhow::Result;
 use bs58;

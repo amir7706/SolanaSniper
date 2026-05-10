@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use tracing::info;
 
 // ─── Solana Constants ───────────────────────────────────────────────
 
@@ -133,13 +134,14 @@ pub enum TradeSignal {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SellReason {
     TakeProfit,
     StopLoss,
     VelocityDrop,
     MaxHoldTime,
     Manual,
+    PredictiveExit,
 }
 
 /// Live velocity tracking data for a specific token
@@ -230,6 +232,156 @@ pub struct TradingState {
     pub total_trades: usize,
     pub winning_trades: usize,
     pub skipped_tokens: usize,
+    // Error counters for debugging
+    pub slippage_errors: u32,
+    pub bundle_drops: u32,
+    pub rent_failed: u32,
+    pub confirm_failed: u32,
+}
+
+impl TradingState {
+    pub fn record_slippage_error(&mut self) {
+        self.slippage_errors += 1;
+    }
+    pub fn record_bundle_drop(&mut self) {
+        self.bundle_drops += 1;
+    }
+    pub fn record_rent_failed(&mut self) {
+        self.rent_failed += 1;
+    }
+    pub fn record_confirm_failed(&mut self) {
+        self.confirm_failed += 1;
+    }
+}
+
+const MAX_METRICS_HISTORY: usize = 50;
+
+#[derive(Debug, Clone)]
+pub struct TradeMetrics {
+    pub predicted_exit: f64,
+    pub actual_exit: f64,
+    pub latency_detection_to_buy_ms: f64,
+    pub mempool_decay_detected: bool,
+    pub exit_reason: SellReason,
+    pub pnl_sol: f64,
+    pub timestamp: DateTime<Utc>,
+}
+
+pub struct ImprovementEngine {
+    metrics_history: Vec<TradeMetrics>,
+    adjusted_tip_multiplier: f64,
+    adjusted_slippage: f64,
+    consecutive_prediction_errors: u32,
+    consecutive_slippage_errors: u32,
+}
+
+impl Default for ImprovementEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ImprovementEngine {
+    pub fn new() -> Self {
+        Self {
+            metrics_history: Vec::with_capacity(MAX_METRICS_HISTORY),
+            adjusted_tip_multiplier: 1.0,
+            adjusted_slippage: 0.01,
+            consecutive_prediction_errors: 0,
+            consecutive_slippage_errors: 0,
+        }
+    }
+
+    pub fn record_trade(&mut self, metrics: TradeMetrics) {
+        if self.metrics_history.len() >= MAX_METRICS_HISTORY {
+            self.metrics_history.remove(0);
+        }
+        self.metrics_history.push(metrics);
+        
+        self.analyze_and_adjust();
+    }
+
+    fn analyze_and_adjust(&mut self) {
+        if self.metrics_history.len() < 10 {
+            return;
+        }
+
+        let recent: Vec<&TradeMetrics> = self.metrics_history.iter().rev().take(10).collect();
+        
+        let mut prediction_errors = 0u32;
+        for trade in &recent {
+            if trade.predicted_exit > trade.actual_exit {
+                prediction_errors += 1;
+            }
+        }
+
+        if prediction_errors >= 6 {
+            self.consecutive_prediction_errors += 1;
+            if self.consecutive_prediction_errors >= 3 {
+                self.adjusted_tip_multiplier = (self.adjusted_tip_multiplier * 1.1).min(2.0);
+                info!(new_tip_mult = format!("{:.2}", self.adjusted_tip_multiplier), "[IMPROVEMENT] Increasing Jito tip by 10% due to prediction lag");
+            }
+        } else {
+            self.consecutive_prediction_errors = 0;
+        }
+
+        let mut slippage_failures = 0u32;
+        for trade in &recent {
+            if trade.exit_reason == SellReason::MaxHoldTime {
+                slippage_failures += 1;
+            }
+        }
+
+        if slippage_failures >= 3 {
+            self.consecutive_slippage_errors += 1;
+            if self.consecutive_slippage_errors >= 2 {
+                self.adjusted_slippage = (self.adjusted_slippage + 0.01).min(0.05);
+                info!(new_slippage = format!("{:.1}%", self.adjusted_slippage * 100.0), "[IMPROVEMENT] Increasing slippage due to failures");
+            }
+        } else {
+            self.consecutive_slippage_errors = 0;
+        }
+    }
+
+    pub fn get_adjusted_tip(&self, base_tip: u64) -> u64 {
+        (base_tip as f64 * self.adjusted_tip_multiplier) as u64
+    }
+
+    pub fn get_adjusted_slippage(&self) -> f64 {
+        self.adjusted_slippage
+    }
+
+    pub fn get_stats(&self) -> ImprovementStats {
+        let total = self.metrics_history.len();
+        let wins = self.metrics_history.iter().filter(|m| m.pnl_sol > 0.0).count();
+        let avg_prediction_error = if !self.metrics_history.is_empty() {
+            let sum: f64 = self.metrics_history.iter()
+                .map(|m| (m.predicted_exit - m.actual_exit).abs())
+                .sum();
+            sum / self.metrics_history.len() as f64
+        } else {
+            0.0
+        };
+
+        ImprovementStats {
+            total_trades: total,
+            wins,
+            win_rate: if total > 0 { wins as f64 / total as f64 } else { 0.0 },
+            avg_prediction_error,
+            tip_multiplier: self.adjusted_tip_multiplier,
+            slippage: self.adjusted_slippage,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImprovementStats {
+    pub total_trades: usize,
+    pub wins: usize,
+    pub win_rate: f64,
+    pub avg_prediction_error: f64,
+    pub tip_multiplier: f64,
+    pub slippage: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

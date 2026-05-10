@@ -14,10 +14,13 @@ use solana_sdk::{
 };
 use spl_associated_token_account::instruction::create_associated_token_account;
 use spl_token::instruction::sync_native;
+use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::time::{timeout, Duration};
-use tracing::info;
+use tracing::{info, warn, debug};
 
 const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 
@@ -53,6 +56,66 @@ pub struct PoolData {
     pub quote_mint: Pubkey,
 }
 
+#[derive(Clone)]
+pub struct TradeLatency {
+    pub detected_at: Option<Instant>,
+    pub buy_sent_at: Option<Instant>,
+    pub confirmed_at: Option<Instant>,
+    pub exited_at: Option<Instant>,
+}
+
+impl TradeLatency {
+    pub fn new() -> Self {
+        Self {
+            detected_at: None,
+            buy_sent_at: None,
+            confirmed_at: None,
+            exited_at: None,
+        }
+    }
+    
+    pub fn set_detected(&mut self) {
+        self.detected_at = Some(Instant::now());
+    }
+    
+    pub fn set_buy_sent(&mut self) {
+        self.buy_sent_at = Some(Instant::now());
+    }
+    
+    pub fn set_confirmed(&mut self) {
+        self.confirmed_at = Some(Instant::now());
+    }
+    
+    pub fn set_exited(&mut self) {
+        self.exited_at = Some(Instant::now());
+    }
+    
+    pub fn detection_to_buy_ms(&self) -> Option<f64> {
+        match (self.detected_at, self.buy_sent_at) {
+            (Some(d), Some(b)) => Some(d.elapsed().as_secs_f64() * 1000.0),
+            _ => None,
+        }
+    }
+    
+    pub fn buy_to_confirm_ms(&self) -> Option<f64> {
+        match (self.buy_sent_at, self.confirmed_at) {
+            (Some(b), Some(c)) => Some(b.elapsed().as_secs_f64() * 1000.0),
+            _ => None,
+        }
+    }
+    
+    pub fn total_duration_ms(&self) -> Option<f64> {
+        match (self.detected_at, self.exited_at) {
+            (Some(d), Some(e)) => Some(d.elapsed().as_secs_f64() * 1000.0),
+            _ => None,
+        }
+    }
+}
+
+impl Default for TradeLatency {
+    fn default() -> Self { Self::new() }
+}
+
 pub struct BundleExecutor {
     http: Client,
     jito_config: JitoConfig,
@@ -61,6 +124,9 @@ pub struct BundleExecutor {
     keypair: Arc<Keypair>,
     pending_sells: std::sync::Mutex<Vec<PendingSell>>,
     latest_blockhash: std::sync::Mutex<Option<solana_sdk::hash::Hash>>,
+    latency: std::sync::Mutex<HashMap<String, TradeLatency>>,
+    pub atomic_running: AtomicBool,
+    pub atomic_checks: AtomicU64,
 }
 
 impl BundleExecutor {
@@ -74,7 +140,10 @@ impl BundleExecutor {
             rpc_url, 
             keypair: Arc::new(keypair), 
             pending_sells: std::sync::Mutex::new(Vec::new()), 
-            latest_blockhash: std::sync::Mutex::new(None) 
+            latest_blockhash: std::sync::Mutex::new(None),
+            latency: std::sync::Mutex::new(HashMap::new()),
+            atomic_running: AtomicBool::new(true),
+            atomic_checks: AtomicU64::new(0),
         })
     }
 
@@ -89,6 +158,44 @@ impl BundleExecutor {
         } else { 
             None 
         } 
+    }
+    
+    pub fn track_detection(&self, mint: &str) {
+        let mut lat = self.latency.lock().unwrap();
+        let entry = lat.entry(mint.to_string()).or_insert_with(TradeLatency::new);
+        entry.set_detected();
+        debug!(mint = %mint, "Detection timestamp recorded");
+    }
+    
+    pub fn track_buy_sent(&self, mint: &str) {
+        let mut lat = self.latency.lock().unwrap();
+        if let Some(entry) = lat.get_mut(mint) {
+            entry.set_buy_sent();
+            if let Some(ms) = entry.detection_to_buy_ms() {
+                info!(mint = %mint, latency_ms = format!("{:.2}", ms), "[LATENCY] Detection→Buy: {:.2}ms", ms);
+            }
+        }
+    }
+    
+    pub fn track_confirmed(&self, mint: &str) {
+        let mut lat = self.latency.lock().unwrap();
+        if let Some(entry) = lat.get_mut(mint) {
+            entry.set_confirmed();
+            if let Some(ms) = entry.buy_to_confirm_ms() {
+                info!(mint = %mint, confirm_ms = format!("{:.2}", ms), "[LATENCY] Buy→Confirm: {:.2}ms (3 slots)", ms);
+            }
+        }
+    }
+    
+    pub fn track_exit(&self, mint: &str, reason: &str) {
+        let mut lat = self.latency.lock().unwrap();
+        if let Some(entry) = lat.get_mut(mint) {
+            entry.set_exited();
+            if let Some(total_ms) = entry.total_duration_ms() {
+                info!(mint = %mint, duration_ms = format!("{:.0}", total_ms), reason = %reason, "[TRADE] Duration: {:.0}ms | Reason: {}", total_ms, reason);
+            }
+        }
+        lat.remove(mint);
     }
 
     pub async fn get_blockhash_internal(&self) -> Result<solana_sdk::hash::Hash> {
@@ -170,8 +277,23 @@ impl BundleExecutor {
         let bh = self.get_blockhash_internal().await?;
         let pool_data = self.fetch_pool_data(pool).await?;
         
-        // Dynamic Jito Tip: High pressure = high tip, Low pressure = minimum tip
-        let tip_amount = if min_sol_output > 0 { self.jito_config.tip_lamports } else { 10_000 };
+        // Dynamic Jito Tip: Scale with expected profit
+        // If min_sol_output > entry (profitable), use higher tip
+        // If min_sol_output <= entry (stop loss/panic), use minimum tip
+        let entry_value = self.trading_config.max_sol_per_trade * LAMPORTS_PER_SOL as f64;
+        let expected_profit_pct = ((min_sol_output as f64 - entry_value) / entry_value) * 100.0;
+        
+        let tip_amount = if expected_profit_pct > 20.0 {
+            // Strong profit - use higher tip to land fast
+            self.jito_config.tip_lamports
+        } else if expected_profit_pct > 0.0 {
+            // Small profit - use standard tip
+            (self.jito_config.tip_lamports as f64 * 0.7) as u64
+        } else {
+            // Loss or breakeven - use minimum tip
+            10_000
+        };
+        
         let tip = self.select_tip_account();
         let tip_ix = transfer(&self.keypair.pubkey(), &tip, tip_amount);
         
@@ -201,8 +323,49 @@ impl BundleExecutor {
         tx2.sign(&[self.keypair.as_ref()], bh);
         txs.push(tx2.message.serialize());
         
-        self.remove_pending_sell(mint);
         self.send_bundle(txs).await
+    }
+
+    pub async fn confirm_buy_and_remove(&self, mint: &Pubkey, tx_signature: &str) -> bool {
+        // 3-Slot Rule: Check if transaction confirmed (~1.6 seconds / 3 slots)
+        // If not confirmed, clear the pending state
+        tokio::time::sleep(Duration::from_millis(1600)).await;
+        
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", 
+            "id": 1, 
+            "method": "getTransaction", 
+            "params": [tx_signature, {"commitment": "confirmed"}]
+        });
+        
+        match timeout(Duration::from_secs(3), self.http.post(&self.rpc_url).json(&body).send()).await {
+            Ok(Ok(resp)) => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(json) => {
+                        if json.pointer("/result").is_some() {
+                            info!(mint = %mint, tx = %tx_signature, "✅ Buy CONFIRMED on-chain");
+                            self.track_confirmed(&mint.to_string());
+                            self.remove_pending_sell(mint);
+                            return true;
+                        } else {
+                            warn!(mint = %mint, tx = %tx_signature, "❌ Buy FAILED - not confirmed after 3 slots");
+                            self.remove_pending_sell(mint);
+                            return false;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "❌ Failed to parse confirmation response");
+                        self.remove_pending_sell(mint);
+                        return false;
+                    }
+                }
+            }
+            _ => {
+                warn!(mint = %mint, tx = %tx_signature, "❌ Buy TIMEOUT - not confirmed after 3 slots");
+                self.remove_pending_sell(mint);
+                return false;
+            }
+        }
     }
 
     fn compute_ata(&self, mint: &Pubkey, owner: &Pubkey) -> Pubkey {
