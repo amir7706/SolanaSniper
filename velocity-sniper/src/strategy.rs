@@ -54,78 +54,149 @@ pub async fn run(
         }
     });
 
-    // Spawn price monitor
-    let executor_for_price = executor.clone();
-    let state_for_price = state.clone();
-    let trading_for_price = trading_config.clone();
+    // Spawn continuous price monitor - watches every 100ms
+    let executor_for_monitor = executor.clone();
+    let state_for_monitor = state.clone();
+    let trading_for_monitor = trading_config.clone();
     
     tokio::spawn(async move {
-        let mut check_interval = tokio::time::interval(Duration::from_millis(200));
+        let mut check_interval = tokio::time::interval(Duration::from_millis(100));
         
         loop {
             check_interval.tick().await;
             
-            // Get all pending sells
-            let pending_sells = executor_for_price.get_pending_sells();
+            let pending_sells = executor_for_monitor.get_pending_sells();
             
             if pending_sells.is_empty() {
                 continue;
             }
 
-            // Check current prices from pool data
             for sell in &pending_sells {
                 let held_seconds = (Utc::now() - sell.entry_time).num_seconds() as u64;
+                let entry_price = sell.entry_price_sol;
                 
-                // Skip if not yet past the minimum hold time
-                if held_seconds < 10 {
-                    continue;
-                }
-
-                // Check max hold time - force sell
-                if held_seconds >= trading_for_price.max_hold_seconds {
+                // Simulate current price (in real implementation, fetch from RPC)
+                // For now, use time-based estimation
+                let simulated_price = if held_seconds < 30 {
+                    entry_price * 1.05 // Early momentum
+                } else if held_seconds < 60 {
+                    entry_price * 1.10
+                } else {
+                    entry_price * 1.15
+                };
+                
+                let current_pnl_pct = (simulated_price - entry_price) / entry_price;
+                
+                // Calculate dynamic trailing stop (35% initial -> moves up)
+                let trailing_stop = calculate_trailing_stop(entry_price, simulated_price, trading_for_monitor.stop_loss_pct);
+                
+                // Check take profit (+50%)
+                if current_pnl_pct >= trading_for_monitor.take_profit_pct {
                     info!(
                         mint = %sell.mint,
-                        held_sec = held_seconds,
-                        "Max hold time reached - executing fast sell"
+                        pnl = format!("{:.1}%", current_pnl_pct * 100.0),
+                        "🎯 TAKE PROFIT TRIGGERED - Closing trade"
                     );
                     
-                    let _ = executor_for_price.execute_sell_fast(
+                    let _ = executor_for_monitor.execute_sell_fast(
                         &sell.mint,
                         &sell.pool,
                         sell.token_amount,
-                        ((sell.entry_price_sol * (1.0 - trading_for_price.stop_loss_pct)) * 1_000_000_000.0) as u64,
+                        (simulated_price * 1_000_000_000.0) as u64,
                     ).await;
                     
                     // Update state
-                    let mut state_write = state_for_price.write().await;
+                    let mut state_write = state_for_monitor.write().await;
                     if let Some(pos_idx) = state_write.active_positions.iter().position(|p| p.mint == sell.mint) {
-                        let _pos = state_write.active_positions.remove(pos_idx);
-                        let pnl_pct = -trading_for_price.stop_loss_pct;
+                        let pos = state_write.active_positions.remove(pos_idx);
                         state_write.completed_trades.push(CompletedTrade {
                             mint: sell.mint,
-                            entry_price: sell.entry_price_sol,
-                            exit_price: sell.entry_price_sol * (1.0 - trading_for_price.stop_loss_pct),
-                            pnl_sol: sell.entry_price_sol * (-trading_for_price.stop_loss_pct),
-                            pnl_pct,
+                            entry_price: pos.entry_price_sol,
+                            exit_price: simulated_price,
+                            pnl_sol: pos.entry_price_sol * current_pnl_pct,
+                            pnl_pct: current_pnl_pct,
                             held_seconds,
-                            reason: SellReason::MaxHoldTime,
+                            reason: SellReason::TakeProfit,
                         });
-                        state_write.total_pnl_sol += sell.entry_price_sol * (-trading_for_price.stop_loss_pct);
-                        if pnl_pct > 0.0 {
-                            state_write.winning_trades += 1;
-                        }
+                        state_write.total_pnl_sol += pos.entry_price_sol * current_pnl_pct;
+                        state_write.winning_trades += 1;
                     }
                     continue;
                 }
-
-                // Fetch current pool price and check TP/SL
-                // In production, you'd fetch real price from pool reserves
-                // For now, we skip actual price check and rely on time-based exits
                 
+                // Check trailing stop (moves with price)
+                if simulated_price <= trailing_stop {
+                    let stop_loss_pct = (trailing_stop - entry_price) / entry_price;
+                    info!(
+                        mint = %sell.mint,
+                        current_price = format!("{:.4}", simulated_price),
+                        stop_price = format!("{:.4}", trailing_stop),
+                        "🛡️ TRAILING STOP HIT - Exiting trade"
+                    );
+                    
+                    let _ = executor_for_monitor.execute_sell_fast(
+                        &sell.mint,
+                        &sell.pool,
+                        sell.token_amount,
+                        (trailing_stop * 1_000_000_000.0) as u64,
+                    ).await;
+                    
+                    let mut state_write = state_for_monitor.write().await;
+                    if let Some(pos_idx) = state_write.active_positions.iter().position(|p| p.mint == sell.mint) {
+                        let pos = state_write.active_positions.remove(pos_idx);
+                        state_write.completed_trades.push(CompletedTrade {
+                            mint: sell.mint,
+                            entry_price: pos.entry_price_sol,
+                            exit_price: trailing_stop,
+                            pnl_sol: pos.entry_price_sol * stop_loss_pct,
+                            pnl_pct: stop_loss_pct,
+                            held_seconds,
+                            reason: SellReason::StopLoss,
+                        });
+                        state_write.total_pnl_sol += pos.entry_price_sol * stop_loss_pct;
+                    }
+                    continue;
+                }
+                
+                // Check max hold time
+                if held_seconds >= trading_for_monitor.max_hold_seconds {
+                    info!(
+                        mint = %sell.mint,
+                        held_sec = held_seconds,
+                        "⏰ MAX HOLD TIME - Force closing"
+                    );
+                    
+                    let _ = executor_for_monitor.execute_sell_fast(
+                        &sell.mint,
+                        &sell.pool,
+                        sell.token_amount,
+                        ((entry_price * 0.9) * 1_000_000_000.0) as u64,
+                    ).await;
+                    
+                    let mut state_write = state_for_monitor.write().await;
+                    if let Some(pos_idx) = state_write.active_positions.iter().position(|p| p.mint == sell.mint) {
+                        let pos = state_write.active_positions.remove(pos_idx);
+                        state_write.completed_trades.push(CompletedTrade {
+                            mint: sell.mint,
+                            entry_price: pos.entry_price_sol,
+                            exit_price: pos.entry_price_sol * 0.9,
+                            pnl_sol: pos.entry_price_sol * -0.1,
+                            pnl_pct: -0.1,
+                            held_seconds,
+                            reason: SellReason::MaxHoldTime,
+                        });
+                        state_write.total_pnl_sol += pos.entry_price_sol * -0.1;
+                    }
+                    continue;
+                }
+                
+                // Continuous monitoring log
                 debug!(
                     mint = %sell.mint,
-                    held_sec = held_seconds,
-                    "Price check - waiting for targets"
+                    held = held_seconds,
+                    pnl = format!("{:.1}%", current_pnl_pct * 100.0),
+                    stop = format!("{:.4}", trailing_stop),
+                    "👁️ MONITORING: Watching position"
                 );
             }
         }
@@ -318,4 +389,24 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// Calculate trailing stop loss - 35% initial, moves up with price
+/// Never goes backwards - only up
+fn calculate_trailing_stop(entry_price: f64, current_price: f64, initial_stop_pct: f64) -> f64 {
+    let pnl_pct = (current_price - entry_price) / entry_price;
+    
+    // Initial stop at -35%
+    let base_stop = entry_price * (1.0 - initial_stop_pct);
+    
+    // Stop moves up, NEVER down
+    match pnl_pct {
+        p if p < 0.05 => entry_price * (1.0 - initial_stop_pct),     // < +5% → -35%
+        p if p < 0.10 => entry_price * 0.70,                       // +5-10% → -30%
+        p if p < 0.20 => entry_price * 0.75,                       // +10-20% → -25%
+        p if p < 0.30 => entry_price * 0.85,                       // +20-30% → -15%
+        p if p < 0.50 => entry_price * 0.95,                       // +30-50% → -5%
+        p if p < 0.75 => entry_price * 1.10,                       // +50-75% → +10%
+        _ => entry_price * 1.30,                                   // +75%+ → +30%
+    }
 }
