@@ -58,15 +58,14 @@ worker_threads = 4
 # NEVER share this key. NEVER commit it to git.
 private_key_bs58 ="yafN4yS69wRtJLHHSee7zqkX7chLN7CC6axuyEPAmhCnRYMuNovC6nfkLRoSahv432c2j3ggyKf5FicGZcGps1c"
 
-# Maximum SOL to spend per single trade
-# SET TO 0 FOR TESTING - bot will attempt but spend $0
-max_sol_per_trade = 0
+# Maximum SOL to spend per single trade (10% of $100 = ~0.1 SOL)
+max_sol_per_trade = 0.1
 
-# Take profit: sell at +15% gain
-take_profit_pct = 0.15
+# Take profit: sell at +50% gain
+take_profit_pct = 0.50
 
-# Stop loss: sell at -5% loss
-stop_loss_pct = 0.05
+# Initial stop loss: -35% (moves with price)
+stop_loss_pct = 0.35
 
 # Maximum allowed slippage for swaps (30% = high, needed for low-liquidity pools)
 max_slippage_pct = 0.30

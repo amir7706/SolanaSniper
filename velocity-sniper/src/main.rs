@@ -7,6 +7,9 @@ pub mod swap_calculator;
 pub mod bundle_executor;
 pub mod strategy;
 pub mod types;
+pub mod precomputed;
+pub mod fast_executor;
+pub mod rug_detector;
 
 use anyhow::Result;
 use bs58;
@@ -142,36 +145,6 @@ async fn main() -> Result<()> {
         config.rpc.clone(),
         config.safety.clone(),
     ));
-
-    // --- FORCE TEST START - Wait for modules to be ready, then inject ---
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-    
-    use solana_sdk::pubkey::Pubkey;
-    use std::str::FromStr;
-    let test_mint = Pubkey::from_str("EPjFW36wd753zP85Deq9FdWxSGNatX24fL2dsPbvoKey").unwrap();
-    let test_pool = Pubkey::from_str("58oQChqxRzSsk8R898SshunX6nSQ2mJ5RjP6M3F2A4Nf").unwrap();
-    let test_quote = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap();
-    let test_lp = Pubkey::from_str("8tnpAUiHcS3JqDfeLqKJ9q4ZtY2m9MmaygC2F2Qk4Uhz").unwrap();
-    
-    tracing::info!("🚨 MANUAL TEST: Injecting USDC pool after all modules started...");
-    let mock_event = types::PoolEvent {
-        tx_signature: "TEST_SIGNATURE_123".to_string(),
-        slot: 100000,
-        detected_at: chrono::Utc::now(),
-        base_mint: test_mint,
-        quote_mint: test_quote,
-        pool_address: test_pool,
-        lp_mint: test_lp,
-        base_vault: Pubkey::default(),
-        quote_vault: Pubkey::default(),
-        base_amount: 1_000_000,
-        quote_amount: 1_000_000_000,
-        authority: Pubkey::default(),
-        raw_data: vec![],
-    };
-    let _ = state.pool_event_sender.send(mock_event);
-    tracing::info!("🚨 TEST: Event sent to safety filter");
-    // --- FORCE TEST END ---
 
     // Wait for Ctrl+C
     tokio::select! {
