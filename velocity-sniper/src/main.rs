@@ -9,7 +9,9 @@ pub mod strategy;
 pub mod types;
 
 use anyhow::Result;
+use bs58;
 use config::Config;
+use solana_sdk::signer::Signer;
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use types::{MintInfo, PoolEvent, TradeSignal, TradingState};
@@ -90,6 +92,18 @@ async fn main() -> Result<()> {
         shred_proxy = %config.shredstream.proxy_address,
         "Configuration loaded"
     );
+
+    // Test: Load wallet from private key
+    let key_bytes = bs58::decode(&config.trading.private_key_bs58)
+        .into_vec()
+        .map_err(|e| anyhow::anyhow!("Invalid private key: {}", e))?;
+    if key_bytes.len() != 64 {
+        anyhow::bail!("Private key must be 64 bytes");
+    }
+    let keypair = solana_sdk::signature::Keypair::from_bytes(&key_bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid keypair: {}", e))?;
+    tracing::info!(wallet = %keypair.pubkey(), "Wallet loaded successfully");
+    tracing::info!(max_sol_per_trade = config.trading.max_sol_per_trade, "Trading config");
 
     let state = AppState::new(config.clone());
 
