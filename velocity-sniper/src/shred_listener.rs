@@ -77,8 +77,8 @@ impl ShredListener {
         socket.set_nonblocking(true)?;
         socket.set_reuse_address(true)?;
 
-        let std_socket: std::net::UdpSocket = socket.into();
-        std_socket.bind(self.bind_addr)?;
+let std_socket: std::net::UdpSocket = socket.into();
+        std::net::UdpSocket::bind(self.bind_addr.clone())?;
         std_socket.connect(self.proxy_addr)?;
 
         info!("UDP socket bound and connected to Jito ShredStream proxy");

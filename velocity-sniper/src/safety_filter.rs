@@ -343,7 +343,7 @@ async fn check_lp_burned(
     if let Some(b64) = data_b64 {
         let data = base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD, b64
-        ).ok()?;
+        ).map_err(|e| anyhow::anyhow!("base64 decode failed: {}", e))?;
 
         if data.len() >= 44 {
             let supply = u64::from_le_bytes(data[36..44].try_into()?);

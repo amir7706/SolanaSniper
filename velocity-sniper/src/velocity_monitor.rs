@@ -373,7 +373,7 @@ pub fn extract_mint_from_tx(tx_data: &[u8]) -> Option<Pubkey> {
     };
 
     let message = tx.message();
-    let account_keys = message.static_account_keys();
+    let account_keys = message.account_keys();
     let raydium_program = match Pubkey::from_str(RAYDIUM_AMM_V4) {
         Ok(p) => p,
         Err(_) => return None,
@@ -437,7 +437,7 @@ pub fn detect_swap_direction(tx_data: &[u8]) -> Option<bool> {
     };
 
     let message = tx.message();
-    let account_keys = message.static_account_keys();
+    let account_keys = message.account_keys();
     let raydium_program = match Pubkey::from_str(RAYDIUM_AMM_V4) {
         Ok(p) => p,
         Err(_) => return None,

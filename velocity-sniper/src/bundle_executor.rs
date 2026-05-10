@@ -178,7 +178,7 @@ impl BundleExecutor {
 
     fn build_buy_instruction(&self, pd: &PoolData, dest: &Pubkey, wsol: &Pubkey, amt: u64, min_out: u64) -> Instruction {
         let user = self.keypair.pubkey();
-        let data = SwapCalculator::new(Client::new(), self.rpc_url.clone()).build_swap_instruction_data(amt, min_out);
+        let data = SwapCalculator::build_swap_instruction_data(amt, min_out);
         Instruction { program_id: Pubkey::from_str(RAYDIUM_AMM_V4_PROGRAM_ID).unwrap(), accounts: vec![AccountMeta::new(pd.pool, false), AccountMeta::new_readonly(pd.authority, false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new(pd.base_vault, false), AccountMeta::new(pd.quote_vault, false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new(*wsol, false), AccountMeta::new(user, true), AccountMeta::new(*dest, false), AccountMeta::new(user, false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new(user, true), AccountMeta::new_readonly(spl_token::id(), false)], data }
     }
 
@@ -186,7 +186,7 @@ impl BundleExecutor {
         let user = self.keypair.pubkey();
         let token_ata = self.compute_ata(mint, &user);
         let wsol = self.compute_wsol_ata(&user);
-        let data = SwapCalculator::new(Client::new(), self.rpc_url.clone()).build_swap_instruction_data(amt, min_out);
+        let data = SwapCalculator::build_swap_instruction_data(amt, min_out);
         Instruction { program_id: Pubkey::from_str(RAYDIUM_AMM_V4_PROGRAM_ID).unwrap(), accounts: vec![AccountMeta::new(pd.pool, false), AccountMeta::new_readonly(pd.authority, false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new(pd.base_vault, false), AccountMeta::new(pd.quote_vault, false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new(token_ata, false), AccountMeta::new(wsol, false), AccountMeta::new(wsol, false), AccountMeta::new(user, false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new_readonly(Pubkey::default(), false), AccountMeta::new(user, true), AccountMeta::new_readonly(spl_token::id(), false)], data }
     }
 
