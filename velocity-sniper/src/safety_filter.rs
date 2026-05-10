@@ -69,6 +69,11 @@ async fn validate_token(
     info!(
         mint = %event.base_mint,
         pool = %event.pool_address,
+        "🔍 SAFETY FILTER: Received pool event, starting validation..."
+    );
+    info!(
+        mint = %event.base_mint,
+        pool = %event.pool_address,
         "Starting safety validation"
     );
 
@@ -206,6 +211,20 @@ async fn validate_token(
     // (Checked by comparing the pool's program interaction patterns)
 
     let is_safe = rejection_reasons.is_empty();
+
+    if is_safe {
+        info!(
+            mint = %event.base_mint,
+            reasons = ?rejection_reasons,
+            "✅ SAFETY FILTER: Token PASSED all checks"
+        );
+    } else {
+        info!(
+            mint = %event.base_mint,
+            reasons = ?rejection_reasons,
+            "❌ SAFETY FILTER: Token REJECTED"
+        );
+    }
 
     let mint_info = MintInfo {
         mint: event.base_mint,
