@@ -107,6 +107,33 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(config.clone());
 
+    // --- FORCE TEST START - Inject fake pool event for testing ---
+    use solana_sdk::pubkey::Pubkey;
+    use std::str::FromStr;
+    let test_mint = Pubkey::from_str("EPjFW36wd753zP85Deq9FdWxSGNatX24fL2dsPbvoKey").unwrap();
+    let test_pool = Pubkey::from_str("58oQChqxRzSsk8R898SshunX6nSQ2mJ5RjP6M3F2A4Nf").unwrap();
+    let test_quote = Pubkey::from_str("So11111111111111111111111111111111111111112").unwrap(); // WSOL
+    let test_lp = Pubkey::from_str("8tnpAUiHcS3JqDfeLqKJ9q4ZtY2m9MmaygC2F2Qk4Uhz").unwrap();
+    
+    tracing::info!("🚨 MANUAL TEST: Injecting USDC pool to check filters...");
+    let mock_event = types::PoolEvent {
+        tx_signature: "TEST_SIGNATURE_123".to_string(),
+        slot: 100000,
+        detected_at: chrono::Utc::now(),
+        base_mint: test_mint,
+        quote_mint: test_quote,
+        pool_address: test_pool,
+        lp_mint: test_lp,
+        base_vault: Pubkey::default(),
+        quote_vault: Pubkey::default(),
+        base_amount: 1_000_000,
+        quote_amount: 1_000_000_000,
+        authority: Pubkey::default(),
+        raw_data: vec![],
+    };
+    let _ = state.pool_event_sender.send(mock_event);
+    // --- FORCE TEST END ---
+
     // Spawn all pipeline stages concurrently
     // Pass both raw_tx_sender (for detector) and tx_for_velocity_sender (for TPM tracking)
     let shred_handle = tokio::spawn(shred_listener::run(
