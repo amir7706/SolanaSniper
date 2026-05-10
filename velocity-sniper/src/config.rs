@@ -124,8 +124,8 @@ impl Config {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        if self.trading.max_sol_per_trade <= 0.0 {
-            anyhow::bail!("max_sol_per_trade must be > 0");
+        if self.trading.max_sol_per_trade < 0.0 {
+            anyhow::bail!("max_sol_per_trade must be >= 0");
         }
         if self.trading.take_profit_pct <= 0.0 || self.trading.take_profit_pct > 10.0 {
             anyhow::bail!("take_profit_pct must be between 0 and 10");
